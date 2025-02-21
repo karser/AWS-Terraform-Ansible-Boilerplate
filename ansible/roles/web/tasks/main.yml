@@ -1,0 +1,72 @@
+---
+- name: Check if AWS CLI is installed
+  stat:
+    path: /usr/local/bin/aws
+  register: aws_cli_installed
+
+- name: Install AWS CLI (if missing)
+  block:
+    - name: Install required dependencies
+      apt:
+        name:
+          - curl
+          - unzip
+        state: present
+
+    - name: Download AWS CLI v2
+      get_url:
+        url: https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip
+        dest: /tmp/awscliv2.zip
+        mode: 0644
+
+    - name: Unzip package
+      unarchive:
+        src: /tmp/awscliv2.zip
+        dest: /tmp
+        remote_src: yes
+
+    - name: Install AWS CLI
+      command: ./aws/install -i /usr/local/aws-cli -b /usr/local/bin
+      args:
+        chdir: /tmp
+  when: not aws_cli_installed.stat.exists
+  tags: aws-cli
+
+- name: Install dependencies
+  apt:
+    name:
+      - python3
+      - python3-pip
+      - python3-venv
+      - python3-dev
+    update_cache: yes
+
+- name: Copy API code
+  copy:
+    src: ../../../src/
+    dest: /opt/api
+    mode: 0755
+
+- name: Create virtual environment
+  command: python3 -m venv /opt/api/venv
+  args:
+    creates: /opt/api/venv
+
+- name: Install Python requirements
+  pip:
+    requirements: /opt/api/requirements.txt
+    virtualenv: /opt/api/venv
+    virtualenv_command: python3 -m venv
+
+- name: Create systemd service
+  template:
+    src: api.service.j2
+    dest: /etc/systemd/system/api.service
+  notify:
+    - Restart API
+
+- name: Ensure API service is running
+  systemd:
+    name: api
+    state: started
+    enabled: yes

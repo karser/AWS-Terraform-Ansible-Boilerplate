@@ -1,0 +1,4 @@
+ssh_key_name = ""
+aws_region = "eu-west-3"
+aws_access_key = ""
+aws_secret_key = ""

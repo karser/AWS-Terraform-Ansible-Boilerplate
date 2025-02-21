@@ -1,0 +1,125 @@
+---
+- name: Check if AWS CLI is installed
+  stat:
+    path: /usr/local/bin/aws
+  register: aws_cli_installed
+
+- name: Install AWS CLI (if missing)
+  block:
+    - name: Install required dependencies
+      apt:
+        name:
+          - curl
+          - unzip
+        state: present
+    - name: Download AWS CLI v2
+      get_url:
+        url: https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip
+        dest: /tmp/awscliv2.zip
+        mode: 0644
+    - name: Unzip package
+      unarchive:
+        src: /tmp/awscliv2.zip
+        dest: /tmp
+        remote_src: yes
+    - name: Install AWS CLI
+      command: ./aws/install -i /usr/local/aws-cli -b /usr/local/bin
+      args:
+        chdir: /tmp
+  when: not aws_cli_installed.stat.exists
+  tags: aws-cli
+
+- name: Install MySQL
+  apt:
+    name:
+      - mysql-server
+      - python3-pymysql
+    state: present
+
+- name: Start MySQL service
+  service:
+    name: mysql
+    state: started
+    enabled: yes
+
+- name: Retrieve database credentials from Secrets Manager
+  shell: |
+    aws secretsmanager get-secret-value \
+      --secret-id {{ db_secret_arn }} \
+      --region {{ aws_region }} \
+      --query SecretString \
+      --output text
+  register: secret_result
+  no_log: true
+  changed_when: false
+
+- name: Parse credentials
+  set_fact:
+    db_creds: "{{ secret_result.stdout | from_json }}"
+  no_log: true
+
+- name: Deploy root credentials file
+  template:
+    src: my.cnf.j2
+    dest: /root/.my.cnf
+    owner: root
+    mode: 0600
+  no_log: true
+
+- name: Initialize root password
+  mysql_user:
+    name: root
+    host: localhost
+    password: "{{ db_creds.password }}"
+    plugin: mysql_native_password
+    check_implicit_admin: yes
+    login_unix_socket: /var/run/mysqld/mysqld.sock
+    state: present
+  become: yes
+  no_log: true
+
+- name: Create database
+  mysql_db:
+    name: "{{ db_creds.dbname }}"
+    state: present
+    login_unix_socket: /var/run/mysqld/mysqld.sock
+  become: yes
+
+- name: Create db user with privileges
+  mysql_user:
+    name: "{{ db_creds.username }}"
+    password: "{{ db_creds.password }}"
+    priv: "{{ db_creds.dbname }}.*:ALL"
+    host: "%"
+    state: present
+    login_unix_socket: /var/run/mysqld/mysqld.sock
+  become: yes
+  no_log: true
+
+- name: Secure MySQL installation
+  block:
+    - name: Remove anonymous users
+      mysql_user:
+        name: ''
+        host_all: yes
+        state: absent
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+      become: yes
+
+    - name: Remove test database
+      mysql_db:
+        name: test
+        state: absent
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+      become: yes
+
+    - name: Set MySQL bind address to private IP
+      ini_file:
+        path: /etc/mysql/mysql.conf.d/mysqld.cnf
+        section: mysqld
+        option: bind-address
+        value: "{{ db_private_ip }}"
+      become: yes
+
+  no_log: true
+  notify: Restart MySQL

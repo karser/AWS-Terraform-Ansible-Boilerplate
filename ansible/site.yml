@@ -1,0 +1,14 @@
+---
+- name: Configure web server
+  hosts: web
+  become: yes
+  roles:
+    - role: web
+      tags: web
+
+- name: Configure database server
+  hosts: db
+  become: yes
+  roles:
+    - role: db
+      tags: db
